@@ -1,0 +1,509 @@
+{
+  "name": "n8n-ai-job-hunter",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e8da1819-cee1-4c90-b03d-4a6f35b14de4",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "{{RESUME_URL}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        208,
+        0
+      ],
+      "id": "2270f2e0-db22-4e50-9a00-b2e1dc9eea1c",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "sSAU8tqFSFY7XD6W",
+          "name": "htuser creds nginx resume"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "3bb751f8-a609-423c-95ba-1aad8561471f",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemma-3-4b-it",
+          "mode": "list",
+          "cachedResultName": "models/gemma-3-4b-it"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Analyze this resume and extract the following in JSON format:\n\n1. name: Full name of the candidate\n2. current_role: Current or most recent job title\n3. experience_years: Approximate years of experience\n4. skills: List of technical skills (array)\n5. domains: Areas of expertise (e.g., web development, data science, etc.)\n6. education: Highest education level\n7. summary: A 2-3 sentence professional summary\n\nResume text:\n{{ $json.text }}\n\nRespond ONLY with valid JSON, no other text."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        0
+      ],
+      "id": "e4f3799d-1be3-4b31-8174-a719eec3dc0a",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "4149un1iqDxBIk4G",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        496,
+        272
+      ],
+      "id": "5e67939a-f526-481f-9159-f3215c2c902a",
+      "name": "Fetch LinkedIn Jobs"
+    },
+    {
+      "parameters": {
+        "jsCode": "const profile = $input.first().json.profile;\nconst searchQuery = $input.first().json.searchQuery;\n\nconst keywords = encodeURIComponent(searchQuery);\nconst location = encodeURIComponent('United States');\n\n// API URL (returns more jobs than main page)\nconst baseUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${keywords}&location=${location}&f_TPR=r86400`;\n\n// Return 3 items - each will trigger HTTP request separately\nreturn [\n  { json: { url: `${baseUrl}&start=0`, batch: 1, profile, searchQuery } },\n  { json: { url: `${baseUrl}&start=10`, batch: 2, profile, searchQuery } },\n  { json: { url: `${baseUrl}&start=20`, batch: 3, profile, searchQuery } }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        272
+      ],
+      "id": "2dfc4122-ca65-4818-b261-be2cae794d15",
+      "name": "LinkedIn Search URL"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the text from Gemini's response structure\nconst geminiText = $input.first().json.content.parts[0].text;\n\n// Remove markdown code blocks\nlet jsonStr = geminiText\n  .replace(/```json\\n?/g, '')\n  .replace(/```\\n?/g, '')\n  .trim();\n\n// Parse the JSON\nlet profileData;\ntry {\n  profileData = JSON.parse(jsonStr);\n} catch (e) {\n  return [{\n    json: {\n      error: 'Failed to parse JSON',\n      rawText: jsonStr\n    }\n  }];\n}\n\n// Build search query from actual data\nconst currentRole = profileData.current_role || 'Software Engineer';\nconst domain = profileData.domains?.[0] || '';\nconst searchQuery = `${currentRole} ${domain}`.trim();\n\nreturn [{\n  json: {\n    profile: profileData,\n    searchQuery: searchQuery\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        272
+      ],
+      "id": "95c5a1e4-eec9-4755-9a9a-cb8e29691c79",
+      "name": "Format Jobs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get ALL items (3 HTTP responses)\nconst allItems = $input.all();\n\n// Get profile from first item\nlet profile = {};\nlet searchQuery = '';\ntry {\n  profile = allItems[0].json.profile || $('LinkedIn Search URL').first().json.profile || {};\n  searchQuery = allItems[0].json.searchQuery || $('LinkedIn Search URL').first().json.searchQuery || '';\n} catch(e) {\n  profile = { name: 'Unknown' };\n}\n\nconst allJobs = [];\nconst seenUrls = new Set();\n\n// Process each batch of HTML\nfor (const item of allItems) {\n  const html = item.json.data || '';\n  \n  // Split by job cards\n  const jobCards = html.split('<li>').slice(1);\n  \n  for (const card of jobCards) {\n    // Extract job title\n    const titleMatch = card.match(/base-search-card__title[^>]*>\\s*([\\s\\S]*?)\\s*<\\/h3>/i);\n    let title = titleMatch ? titleMatch[1].trim() : '';\n    \n    // Extract company name\n    const companyMatch = card.match(/hidden-nested-link[^>]*>\\s*([\\s\\S]*?)\\s*<\\/a>/i);\n    let company = companyMatch ? companyMatch[1].trim() : '';\n    \n    // Extract location\n    const locationMatch = card.match(/job-search-card__location[^>]*>\\s*([\\s\\S]*?)\\s*<\\/span>/i);\n    let location = locationMatch ? locationMatch[1].trim() : '';\n    \n    // Extract URL\n    const urlMatch = card.match(/href=\"(https:\\/\\/www\\.linkedin\\.com\\/jobs\\/view\\/[^\"?]+)/i);\n    let url = urlMatch ? urlMatch[1] : '';\n    \n    // Extract posted date\n    const dateMatch = card.match(/datetime=\"([^\"]+)\"/i);\n    let posted = dateMatch ? dateMatch[1] : 'Recent';\n    \n    // Only add if we have title, company, and URL not seen before\n    if (title && company && url && !seenUrls.has(url)) {\n      seenUrls.add(url);\n      allJobs.push({\n        title: title,\n        company: company,\n        location: location,\n        url: url,\n        posted: posted\n      });\n    }\n  }\n}\n\n// Add IDs\nconst jobs = allJobs.map((job, index) => ({\n  id: index + 1,\n  ...job\n}));\n\nreturn [{\n  json: {\n    profile: profile,\n    jobs: jobs,\n    totalFound: jobs.length,\n    searchQuery: searchQuery\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        272
+      ],
+      "id": "eb70b154-9e6f-45be-b9ba-b97bd3953882",
+      "name": "Parse Jobs"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "jobs",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        944,
+        272
+      ],
+      "id": "e375bcbf-d264-4cd7-a25f-86b6ecb0d31d",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 3000
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        208,
+        576
+      ],
+      "id": "c851b911-852b-4ce1-80a9-268cec5dfd13",
+      "name": "Fetch Job Description"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst jobsWithJD = [];\n\nfor (const item of items) {\n  const html = item.json.data || '';\n  \n  // Get original job data from Split Out (it's in the pairedItem)\n  const splitOutItems = $('Split Out').all();\n  const originalJob = splitOutItems[items.indexOf(item)]?.json || {};\n  \n  // Fallback: try to get from item itself\n  const jobData = {\n    id: originalJob.id || item.json.id,\n    title: originalJob.title || item.json.title,\n    company: originalJob.company || item.json.company,\n    location: originalJob.location || item.json.location,\n    url: originalJob.url || item.json.url,\n    posted: originalJob.posted || item.json.posted\n  };\n  \n  // Extract job description from HTML\n  let description = '';\n  const patterns = [\n    /class=\"description__text[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i,\n    /class=\"show-more-less-html__markup[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i,\n    /class=\"decorated-job-posting__details[^\"]*\"[^>]*>([\\s\\S]*?)<\\/section>/i\n  ];\n  \n  for (const pattern of patterns) {\n    const match = html.match(pattern);\n    if (match && match[1]) {\n      description = match[1];\n      break;\n    }\n  }\n  \n  // Clean description\n  description = description\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&#[0-9]+;/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 8000);\n  \n  if (!description || description.length < 50) {\n    description = `Job Title: ${jobData.title} at ${jobData.company}. Location: ${jobData.location}. (Full description not available)`;\n  }\n  \n  // Create matchKey\n  const matchKey = jobData.title && jobData.company \n    ? `${jobData.title}|||${jobData.company}`.toLowerCase()\n    : 'unknown|||unknown';\n  \n  jobsWithJD.push({\n    id: jobData.id,\n    title: jobData.title,\n    company: jobData.company,\n    location: jobData.location,\n    url: jobData.url,\n    posted: jobData.posted,\n    matchKey: matchKey,\n    description: description\n  });\n}\n\n// Get profile and resume\nlet profile = {};\nlet resumeText = '';\ntry {\n  const parseNode = $('Parse Jobs').first().json;\n  profile = parseNode.profile || {};\n  resumeText = $('Extract from File').first().json.data || '';\n} catch(e) {\n  profile = { name: 'Unknown' };\n}\n\nreturn [{\n  json: {\n    profile: profile,\n    resumeText: resumeText.slice(0, 4000),\n    jobs: jobsWithJD,\n    totalJobs: jobsWithJD.length\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        576
+      ],
+      "id": "340ccda1-549b-4712-8018-cdfb3bd3c794",
+      "name": "Extract JD"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=🔴 CRITICAL INSTRUCTION:\nYou MUST preserve the EXACT \"id\" value from each input job.\nThe \"job_id\" in your output MUST match the \"id\" from the input.\nDO NOT create new sequential IDs like 1, 2, 3...\nUSE THE ORIGINAL ID from the input data.\n\nYou are an expert ATS analyzer and career advisor.\n\n## CANDIDATE RESUME:\n{{ $json.resumeText }}\n\n## CANDIDATE PROFILE:\n- Name: {{ $json.profile.name }}\n- Current Role: {{ $json.profile.current_role }}\n- Experience: {{ $json.profile.experience_years }} years\n- Skills: {{ $json.profile.skills }}\n- Domains: {{ $json.profile.domains }}\n\n## JOB LISTINGS ({{ $json.totalJobs }} total):\n{{ JSON.stringify($json.jobs, null, 2) }}\n\n## YOUR TASK:\nAnalyze each job and score them. Return the TOP 10 highest-scoring jobs.\n\n## CRITICAL OUTPUT REQUIREMENTS:\n1. Use the EXACT \"id\" from each input job as \"job_id\" in your output\n2. Use the EXACT \"title\" from input\n3. Use the EXACT \"company\" from input  \n4. Use the EXACT \"location\" from input\n5. Use the EXACT \"url\" from input\n6. Use the EXACT \"matchKey\" from input\n\n## OUTPUT FORMAT (JSON only, no markdown):\n[\n  {\n    \"rank\": 1,\n    \"job_id\": <USE ORIGINAL ID FROM INPUT>,\n    \"title\": \"<exact from input>\",\n    \"company\": \"<exact from input>\",\n    \"location\": \"<exact from input>\",\n    \"url\": \"<exact from input>\",\n    \"matchKey\": \"<exact from input>\",\n    \"match_score\": <60-100>,\n    \"skills_matched\": [\"skill1\", \"skill2\"],\n    \"skills_missing\": [\"skill3\"],\n    \"why_good_fit\": \"<2-3 sentences>\",\n    \"application_tip\": \"<specific tip>\"\n  }\n]\n\nIMPORTANT: The \"job_id\" is NOT the rank. If you select the job with id=22 as your #1 ranked job, you write: \"rank\": 1, \"job_id\": 22\n\nReturn ONLY the JSON array."
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        592,
+        576
+      ],
+      "id": "ae019230-a1b4-4feb-81fa-68f84fff75ac",
+      "name": "Analyze Jobs with AI",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "4149un1iqDxBIk4G",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// Get the AI response text from Gemini\nlet aiResponse = '';\nif (input.content?.parts?.[0]?.text) {\n  aiResponse = input.content.parts[0].text;\n} else if (input.text) {\n  aiResponse = input.text;\n} else if (input.content) {\n  aiResponse = typeof input.content === 'string' ? input.content : JSON.stringify(input.content);\n}\n\n// Clean any potential markdown\nlet cleanedResponse = aiResponse\n  .replace(/```json\\n?/g, '')\n  .replace(/```\\n?/g, '')\n  .trim();\n\n// Parse the JSON array\nlet rankedJobs = [];\ntry {\n  rankedJobs = JSON.parse(cleanedResponse);\n} catch(e) {\n  // If direct parse fails, try to extract JSON array\n  const jsonMatch = cleanedResponse.match(/\\[[\\s\\S]*\\]/);\n  if (jsonMatch) {\n    try {\n      rankedJobs = JSON.parse(jsonMatch[0]);\n    } catch(e2) {\n      return [{\n        json: {\n          error: 'Failed to parse AI response',\n          rawResponse: cleanedResponse.slice(0, 1000),\n          parseError: e2.message\n        }\n      }];\n    }\n  }\n}\n\n// Get profile for context\nlet profile = {};\ntry {\n  profile = $('Parse AI Results').first().json.profile || {};\n} catch(e) {\n  profile = { name: 'Job Seeker' };\n}\n\n// Filter to only strong matches (optional - already filtered by Gemini)\nconst strongMatches = rankedJobs.filter(job => job.match_score >= 85);\nconst goodMatches = rankedJobs.filter(job => job.match_score >= 75);\n\nreturn [{\n  json: {\n    profile: profile,\n    allMatches: rankedJobs,\n    strongMatches: strongMatches,\n    goodMatches: goodMatches,\n    totalAnalyzed: rankedJobs.length,\n    totalStrong: strongMatches.length,\n    totalGood: goodMatches.length\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        576
+      ],
+      "id": "adeb583f-7fcb-4336-8346-ac1f550c8f6d",
+      "name": "Parse AI Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst profile = input.profile || {};\nconst jobs = input.allMatches || [];\n\nconst today = new Date().toLocaleDateString('en-US', { \n  weekday: 'long', \n  year: 'numeric', \n  month: 'long', \n  day: 'numeric' \n});\n\n// Create an array to hold all messages\nconst messages = [];\n\n// First message: Summary header\nlet summaryMessage = `🎯 Daily Job Match Report\\n`;\nsummaryMessage += `📅 ${today}\\n`;\nsummaryMessage += `👤 ${profile.name || 'Job Seeker'}\\n`;\nsummaryMessage += `━━━━━━━━━━━━━━━━━━━━\\n\\n`;\n\nif (jobs.length === 0) {\n  summaryMessage += `😕 No strong matches found today.\\n\\n`;\n  summaryMessage += `💡 Try updating your resume or broadening search criteria.`;\n  messages.push({ message: summaryMessage });\n} else {\n  const strongCount = jobs.filter(j => j.match_score >= 95).length;\n  \n  summaryMessage += `✨ Found ${jobs.length} excellent opportunities\\n`;\n  if (strongCount > 0) {\n    summaryMessage += `🔥 ${strongCount} exceptional matches (95%+)\\n`;\n  }\n  summaryMessage += `\\nSending you the details now...\\n`;\n  \n  messages.push({ message: summaryMessage });\n  \n  // Create one message per job\n  jobs.slice(0, 10).forEach((job, index) => {\n    // Score emoji\n    let scoreEmoji = '🔴';\n    if (job.match_score >= 98) scoreEmoji = '🔥';\n    else if (job.match_score >= 95) scoreEmoji = '🟢';\n    else if (job.match_score >= 90) scoreEmoji = '🟡';\n    else if (job.match_score >= 85) scoreEmoji = '🟠';\n    \n    let jobMessage = `━━━━━━━━━━━━━━━━━━━━\\n`;\n    jobMessage += `📋 JOB ${index + 1} of ${jobs.length}\\n`;\n    jobMessage += `━━━━━━━━━━━━━━━━━━━━\\n\\n`;\n    \n    // Job title and company\n    jobMessage += `${job.title}\\n`;\n    jobMessage += `🏢 ${job.company}\\n`;\n    \n    if (job.location && job.location !== 'N/A') {\n      jobMessage += `📍 ${job.location}\\n`;\n    }\n    \n    jobMessage += `${scoreEmoji} Match Score: ${job.match_score}%\\n\\n`;\n    \n    // Top skills matched\n    if (job.skills_matched && job.skills_matched.length > 0) {\n      const topSkills = job.skills_matched.slice(0, 6).join(', ');\n      jobMessage += `✅ Matched Skills:\\n${topSkills}`;\n      if (job.skills_matched.length > 6) {\n        jobMessage += ` +${job.skills_matched.length - 6} more`;\n      }\n      jobMessage += `\\n\\n`;\n    }\n    \n    // Missing skills\n    if (job.skills_missing && job.skills_missing.length > 0 && job.skills_missing.length <= 3) {\n      jobMessage += `📚 Consider adding: ${job.skills_missing.join(', ')}\\n\\n`;\n    }\n    \n    // Why good fit (truncate if too long)\n    if (job.why_good_fit) {\n      const fitText = job.why_good_fit.length > 250 \n        ? job.why_good_fit.substring(0, 247) + '...' \n        : job.why_good_fit;\n      jobMessage += `💡 Why It's a Match:\\n${fitText}\\n\\n`;\n    }\n    \n    // Application tip (truncate if too long)\n    if (job.application_tip) {\n      const tipText = job.application_tip.length > 200\n        ? job.application_tip.substring(0, 197) + '...'\n        : job.application_tip;\n      jobMessage += `📝 Application Tip:\\n${tipText}\\n\\n`;\n    }\n    \n    // Get actual URL from Parse Jobs\n    try {\n      const parseJobsData = $('Parse Jobs').first().json;\n      const originalJob = parseJobsData.jobs.find(j => j.id === job.job_id);\n      const jobUrl = originalJob?.url || job.url;\n      \n      if (jobUrl && jobUrl !== 'N/A') {\n        jobMessage += `🔗 Apply Here:\\n${jobUrl}\\n`;\n      }\n    } catch(e) {\n      // URL not available\n    }\n    \n    messages.push({ message: jobMessage });\n  });\n  \n  // Final message\n  const finalMessage = `━━━━━━━━━━━━━━━━━━━━\\n\\n💪 Good luck with your applications!\\n🔄 Next update: Tomorrow at 9 AM`;\n  messages.push({ message: finalMessage });\n}\n\n// Return all messages as separate items\nreturn messages.map(msg => ({ json: msg }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        576
+      ],
+      "id": "cbbe9437-477a-48ce-a7e5-429c619928e5",
+      "name": "Format Telegram Messages"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{DISCORD_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "=={{ $json.message }}"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 2000
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1360,
+        576
+      ],
+      "id": "ed56cfc6-daa7-4609-847d-4536702a35aa",
+      "name": "HTTP Request1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Format Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn Search URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch LinkedIn Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Jobs": {
+      "main": [
+        [
+          {
+            "node": "LinkedIn Search URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch LinkedIn Jobs": {
+      "main": [
+        [
+          {
+            "node": "Parse Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Jobs": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Fetch Job Description",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Job Description": {
+      "main": [
+        [
+          {
+            "node": "Extract JD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract JD": {
+      "main": [
+        [
+          {
+            "node": "Analyze Jobs with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Jobs with AI": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Results": {
+      "main": [
+        [
+          {
+            "node": "Format Telegram Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Telegram Messages": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "20591e8c-4757-4d61-9159-76e74801ef05",
+  "meta": {
+    "instanceId": "7230c8a08bcab6eab4af3b4781334525633dba44870b76625951154569a935f4"
+  },
+  "id": "x6pjkscPtV07SiaQ",
+  "tags": []
+}
