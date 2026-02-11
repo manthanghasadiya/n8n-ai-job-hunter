@@ -189,8 +189,8 @@ MIT License - feel free to use, modify, and distribute.
 ## Author
 
 **Manthan Ghasadiya**
-- LinkedIn: [linkedin.com/in/manthanghasadiya](https://linkedin.com/in/manthanghasadiya)
-- GitHub: [github.com/yourusername](https://github.com/yourusername)
+- LinkedIn: [linkedin.com/in/manthanghasadiya](https://linkedin.com/in/man-ghasadiya)
+- GitHub: [github.com/yourusername](https://github.com/manthanghasadiya)
 
 ---
 
